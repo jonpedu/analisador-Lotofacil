@@ -23,6 +23,12 @@ py -m pip install -r requirements.txt
 py main.py
 ```
 
+### Interface Streamlit
+
+```bash
+py -m streamlit run streamlit_app.py
+```
+
 No menu, siga esta ordem:
 
 1. Carga inicial pelo Excel (uma vez)
