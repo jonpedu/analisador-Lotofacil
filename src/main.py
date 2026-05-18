@@ -8,10 +8,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from analyzer import calculate_draw_stats, sliding_window_analysis
-from api import fetch_draw_by_concurso
-from config_manager import load_filter_config, save_filter_config
-from db import (
+from src.analyzer import calculate_draw_stats, sliding_window_analysis
+from src.api import fetch_draw_by_concurso
+from src.config_manager import load_filter_config, save_filter_config
+from src.db import (
     connect_db,
     count_draws,
     get_all_draws,
@@ -22,8 +22,8 @@ from db import (
     upsert_draw,
     upsert_stats,
 )
-from etl import read_initial_excel
-from filters import FilterConfig, generate_filtered_games
+from src.etl import read_initial_excel
+from src.filters import FilterConfig, generate_filtered_games
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"

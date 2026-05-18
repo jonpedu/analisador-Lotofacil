@@ -4,7 +4,7 @@ import random
 from dataclasses import dataclass
 from typing import Callable
 
-from analyzer import FIBONACCI, MOLDURA, PRIMOS
+from src.analyzer import FIBONACCI, MOLDURA, PRIMOS
 
 Validator = Callable[[list[int], "FilterConfig", list[int]], bool]
 

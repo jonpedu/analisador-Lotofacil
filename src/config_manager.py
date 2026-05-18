@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-from filters import FilterConfig, default_filter_config
+from src.filters import FilterConfig, default_filter_config
 
 
 def load_filter_config(config_path: Path) -> FilterConfig:
