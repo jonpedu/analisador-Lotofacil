@@ -12,6 +12,7 @@ from src.db import (
     connect_db,
     count_draws,
     get_all_draws,
+    get_draw_by_concurso,
     get_last_concurso,
     get_recent_draws,
     get_recent_stats,
@@ -310,6 +311,108 @@ def _generate_section() -> None:
         st.success("🍀 Boa sorte!")
 
 
+def _resultados_section() -> None:
+    st.markdown("### 🧐 Resultados dos Jogos")
+    st.caption("Consulte jogos passados e seus resultados listados lado a lado.")
+    st.markdown("---")
+
+    with connect_db(DB_PATH) as conn:
+        total = count_draws(conn)
+        last_concurso = get_last_concurso(conn)
+
+    if total == 0 or last_concurso is None:
+        st.warning("⚠️ Banco vazio. É necessário fazer a carga de dados para exibir resultados.")
+        return
+
+    if "concurso_v" not in st.session_state:
+        st.session_state.concurso_v = last_concurso
+
+    tab_busca, tab_recentes = st.tabs(["🔍 Buscar por Concurso", "📜 Últimos Sorteios"])
+
+    with tab_busca:
+        col_search_1, col_search_2 = st.columns([4, 1])
+        with col_search_1:
+            busca_input = st.number_input("Ir para o concurso:", min_value=1, max_value=last_concurso, value=st.session_state.concurso_v, step=1, label_visibility="collapsed")
+        with col_search_2:
+            if st.button("🔍 Buscar", use_container_width=True):
+                st.session_state.concurso_v = busca_input
+                st.rerun()
+
+        st.write("")
+
+        with connect_db(DB_PATH) as conn:
+            draw = get_draw_by_concurso(conn, int(st.session_state.concurso_v))
+
+        col_ant, col_titulo, col_prox = st.columns([1, 4, 1])
+        
+        with col_ant:
+            if st.button("⬅️ Anterior", use_container_width=True, disabled=(st.session_state.concurso_v <= 1)):
+                st.session_state.concurso_v -= 1
+                st.rerun()
+
+        with col_titulo:
+            if draw:
+                st.markdown(f"<h3 style='text-align: center; color: #8A2BE2;'>RESULTADO DA LOTOFÁCIL CONCURSO {draw['concurso']} DIA {draw['data_sorteio']}</h3>", unsafe_allow_html=True)
+            else:
+                st.markdown("<h3 style='text-align: center;'>Concurso não encontrado</h3>", unsafe_allow_html=True)
+
+        with col_prox:
+            if st.button("Próximo ➡️", use_container_width=True, disabled=(st.session_state.concurso_v >= last_concurso)):
+                st.session_state.concurso_v += 1
+                st.rerun()
+
+        if draw:
+            s_jogo = " ➖ ".join(f"{n:02d}" for n in draw['dezenas'])
+            st.info(f"### {s_jogo}")
+
+    with tab_recentes:
+        if "page_recentes" not in st.session_state:
+            st.session_state.page_recentes = 0
+
+        col_qtd, col_espaco = st.columns([1, 4])
+        with col_qtd:
+            per_page = st.selectbox("Quantidade por página:", [10, 20, 50], index=0)
+
+        with connect_db(DB_PATH) as conn:
+            all_draws = get_all_draws(conn)
+            
+        all_draws.sort(key=lambda x: x["concurso"], reverse=True)
+        total_pages = max(1, (len(all_draws) + per_page - 1) // per_page)
+        
+        # Corrige a página caso troque a quantidade por página e extrapole
+        if st.session_state.page_recentes >= total_pages:
+            st.session_state.page_recentes = total_pages - 1
+            
+        col_ant, col_pag, col_prox = st.columns([1, 4, 1])
+        with col_ant:
+            if st.button("⬅️ Página Anterior", use_container_width=True, disabled=(st.session_state.page_recentes <= 0)):
+                st.session_state.page_recentes -= 1
+                st.rerun()
+                
+        with col_pag:
+            st.markdown(f"<h4 style='text-align: center; margin-top: 5px;'>Página {st.session_state.page_recentes + 1} de {total_pages}</h4>", unsafe_allow_html=True)
+            
+        with col_prox:
+            if st.button("Próxima Página ➡️", use_container_width=True, disabled=(st.session_state.page_recentes >= total_pages - 1)):
+                st.session_state.page_recentes += 1
+                st.rerun()
+                
+        start_idx = st.session_state.page_recentes * per_page
+        end_idx = start_idx + per_page
+        page_items = all_draws[start_idx:end_idx]
+
+        st.write("")
+        for d in page_items:
+            s_jogo = " ➖ ".join(f"{n:02d}" for n in d['dezenas'])
+            st.markdown(
+                f"<div style='border: 1px solid rgba(138, 43, 226, 0.4); border-radius: 8px; padding: 15px; margin-bottom: 10px; background-color: rgba(138, 43, 226, 0.05);'>"
+                f"<h5 style='margin: 0; color: #8A2BE2;'>Concurso {d['concurso']} <span style='font-size: 14px; color: gray;'>({d['data_sorteio']})</span></h5>"
+                f"<p style='font-size: 20px; font-weight: bold; margin: 10px 0 0 0; letter-spacing: 2px;'>{s_jogo}</p>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+
 def main() -> None:
     _bootstrap_db()
 
@@ -321,6 +424,7 @@ def main() -> None:
             "📍 Navegação",
             [
                 "📊 Status",
+                "🧐 Resultados dos Jogos",
                 "📥 Carga Inicial",
                 "🔄 Atualizar p/ API",
                 "📈 Análise Inteligente",
@@ -330,6 +434,8 @@ def main() -> None:
 
     if menu == "📊 Status":
         _status_section()
+    elif menu == "🧐 Resultados dos Jogos":
+        _resultados_section()
     elif menu == "📥 Carga Inicial":
         _load_excel_section()
     elif menu == "🔄 Atualizar p/ API":
