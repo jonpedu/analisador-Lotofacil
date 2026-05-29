@@ -1,0 +1,12 @@
+{
+  "even_min": 2,
+  "even_max": 4,
+  "sum_min": 120,
+  "sum_max": 240,
+  "prime_min": 0,
+  "prime_max": 3,
+  "fibonacci_min": 0,
+  "fibonacci_max": 2,
+  "q_min": 0,
+  "q_max": 3
+}

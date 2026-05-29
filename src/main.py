@@ -8,8 +8,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from src.analyzer import calculate_draw_stats, sliding_window_analysis
-from src.api import fetch_draw_by_concurso
+# Imports Modulares
 from src.config_manager import load_filter_config, save_filter_config
 from src.db import (
     connect_db,
@@ -23,22 +22,31 @@ from src.db import (
     upsert_stats,
 )
 from src.etl import read_initial_excel
-from src.filters import FilterConfig, generate_filtered_games
+from src.api import fetch_draw_by_concurso
 
-APP_DIR = Path(__file__).resolve().parent
+import src.lotofacil.analyzer as lf_analyzer
+import src.lotofacil.filters as lf_filters
+import src.megasena.analyzer as ms_analyzer
+import src.megasena.filters as ms_filters
+
+APP_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = APP_DIR / "data"
 DB_PATH = DATA_DIR / "lotofacil_analyzer_pro.db"
-CONFIG_PATH = DATA_DIR / "config_filtros.json"
-DEFAULT_EXCEL_PATH = APP_DIR / "Lotofácil.xlsx"
-API_BASE_URL = "https://loteriascaixa-api.herokuapp.com/api/lotofacil"
+
+CONFIG_LOTOFACIL = DATA_DIR / "config_filtros_lotofacil.json"
+CONFIG_MEGASENA = DATA_DIR / "config_filtros_megasena.json"
+
+API_LOTOFACIL = "https://loteriascaixa-api.herokuapp.com/api/lotofacil"
+API_MEGASENA = "https://loteriascaixa-api.herokuapp.com/api/megasena"
 
 console = Console()
 
 
-def _show_header() -> None:
+def _show_header(lottery_type: str) -> None:
+    l_name = "Lotofácil" if lottery_type == "lotofacil" else "Mega-Sena"
     console.print(
         Panel.fit(
-            "[bold green]Lotofacil Analyzer Pro[/bold green]\n"
+            f"[bold green]Loterias Pro-Analyzer: {l_name}[/bold green]\n"
             "App local em terminal para atualizar historico, analisar padroes e gerar palpites.",
             border_style="green",
         )
@@ -50,24 +58,27 @@ def _bootstrap_db() -> None:
         init_db(conn)
 
 
-def _load_initial_excel_flow() -> None:
+def _load_initial_excel_flow(lottery_type: str) -> None:
     with connect_db(DB_PATH) as conn:
-        total = count_draws(conn)
+        total = count_draws(conn, lottery_type)
         if total > 0:
-            console.print("[yellow]O banco ja possui dados. Esta carga e recomendada apenas uma vez.[/yellow]")
+            console.print("[yellow]O banco ja possui dados para esta loteria. Esta carga e recomendada apenas uma vez.[/yellow]")
             if not questionary.confirm("Deseja continuar mesmo assim?", default=False).ask():
                 return
 
+        excel_filename = "Lotofácil.xlsx" if lottery_type == "lotofacil" else "Mega-Sena.xlsx"
+        default_path = APP_DIR / excel_filename
+
         excel_path_txt = questionary.text(
             "Caminho do arquivo Excel:",
-            default=str(DEFAULT_EXCEL_PATH),
+            default=str(default_path),
         ).ask()
         if not excel_path_txt:
             return
 
         excel_path = Path(excel_path_txt)
         try:
-            draws = read_initial_excel(excel_path)
+            draws = read_initial_excel(excel_path, lottery_type)
         except Exception as exc:
             console.print(f"[red]Erro ao ler Excel:[/red] {exc}")
             return
@@ -77,19 +88,24 @@ def _load_initial_excel_flow() -> None:
             return
 
         for draw in draws:
-            upsert_draw(conn, draw["concurso"], draw["data_sorteio"], draw["dezenas"])
-            stats = calculate_draw_stats(draw["dezenas"])
-            upsert_stats(conn, draw["concurso"], stats)
+            upsert_draw(conn, lottery_type, draw["concurso"], draw["data_sorteio"], draw["dezenas"])
+            
+            if lottery_type == "megasena":
+                stats = ms_analyzer.calculate_draw_stats(draw["dezenas"])
+            else:
+                stats = lf_analyzer.calculate_draw_stats(draw["dezenas"])
+                
+            upsert_stats(conn, lottery_type, draw["concurso"], stats)
 
         conn.commit()
 
     console.print(f"[green]Carga concluida: {len(draws)} sorteios importados.[/green]")
-    console.print("[cyan]Dica:[/cyan] agora voce pode deletar o Excel para manter apenas o banco local.")
 
 
-def _update_from_api_flow() -> None:
+def _update_from_api_flow(lottery_type: str) -> None:
+    api_url = API_LOTOFACIL if lottery_type == "lotofacil" else API_MEGASENA
     with connect_db(DB_PATH) as conn:
-        last = get_last_concurso(conn)
+        last = get_last_concurso(conn, lottery_type)
         if last is None:
             console.print("[yellow]Banco vazio. Execute primeiro a carga inicial via Excel.[/yellow]")
             return
@@ -99,7 +115,7 @@ def _update_from_api_flow() -> None:
 
         while True:
             try:
-                draw = fetch_draw_by_concurso(API_BASE_URL, next_concurso)
+                draw = fetch_draw_by_concurso(api_url, next_concurso, lottery_type)
             except Exception as exc:
                 console.print(f"[red]Erro na API no concurso {next_concurso}:[/red] {exc}")
                 break
@@ -107,8 +123,14 @@ def _update_from_api_flow() -> None:
             if draw is None:
                 break
 
-            upsert_draw(conn, draw["concurso"], draw["data_sorteio"], draw["dezenas"])
-            upsert_stats(conn, draw["concurso"], calculate_draw_stats(draw["dezenas"]))
+            upsert_draw(conn, lottery_type, draw["concurso"], draw["data_sorteio"], draw["dezenas"])
+            
+            if lottery_type == "megasena":
+                stats = ms_analyzer.calculate_draw_stats(draw["dezenas"])
+            else:
+                stats = lf_analyzer.calculate_draw_stats(draw["dezenas"])
+                
+            upsert_stats(conn, lottery_type, draw["concurso"], stats)
             imported += 1
             next_concurso += 1
 
@@ -120,24 +142,32 @@ def _update_from_api_flow() -> None:
         console.print(f"[green]Atualizacao concluida: {imported} novos concursos adicionados.[/green]")
 
 
-def _render_analysis_tables(analysis: dict) -> None:
-    hot_table = Table(title="Mais sorteadas (janela)", show_header=True, header_style="bold cyan")
-    hot_table.add_column("Dezena", justify="right")
-    hot_table.add_column("Frequencia", justify="right")
-    for dezena, freq in analysis["mais_sorteadas"]:
-        hot_table.add_row(str(dezena), str(freq))
+def _render_analysis_tables(analysis: dict, lottery_type: str) -> None:
+    # Tabela completa ordenada
+    freq_table = Table(title="Tabela de Frequência Completa Ordenada", show_header=True, header_style="bold green")
+    freq_table.add_column("Dezena", justify="right")
+    freq_table.add_column("Frequência", justify="right")
+    freq_table.add_column("Frequência (%)", justify="right")
+    freq_table.add_column("Atraso Atual", justify="right")
+    freq_table.add_column("Categoria")
 
-    cold_table = Table(title="Menos sorteadas (janela)", show_header=True, header_style="bold magenta")
-    cold_table.add_column("Dezena", justify="right")
-    cold_table.add_column("Frequencia", justify="right")
-    for dezena, freq in analysis["menos_sorteadas"]:
-        cold_table.add_row(str(dezena), str(freq))
+    for item in analysis["frequencia_completa"]:
+        freq_table.add_row(
+            str(item["Dezena"]),
+            str(item["Frequência"]),
+            f"{item['Frequência (%)']}%",
+            str(item["Atraso Atual"]),
+            item["Categoria"]
+        )
 
-    atraso_table = Table(title="Top 10 atrasos", show_header=True, header_style="bold yellow")
-    atraso_table.add_column("Dezena", justify="right")
-    atraso_table.add_column("Atraso (concursos)", justify="right")
-    for dezena, atraso in sorted(analysis["atrasos"].items(), key=lambda item: item[1], reverse=True)[:10]:
-        atraso_table.add_row(str(dezena), str(atraso))
+    console.print(freq_table)
+
+    if lottery_type == "lotofacil":
+        ciclo = analysis["ciclo"]
+        console.print(f"\n[bold yellow]Ciclo das Dezenas (Lotofácil):[/bold yellow]")
+        console.print(f"Ciclo Atual: [cyan]{ciclo['ciclo_atual_numero']}[/cyan] | Concursos acumulados: [cyan]{ciclo['concursos_no_ciclo_atual']}[/cyan]")
+        s_ausentes = ", ".join(f"{n:02d}" for n in ciclo["dezenas_ausentes_atual"])
+        console.print(f"Dezenas Ausentes: [red]{s_ausentes}[/red]\n")
 
     media_table = Table(title="Medias e Modas recentes", show_header=True, header_style="bold green")
     media_table.add_column("Metrica")
@@ -148,33 +178,34 @@ def _render_analysis_tables(analysis: dict) -> None:
         moda = analysis["modas"].get(key)
         media_table.add_row(key, f"{media:.2f}", "-" if moda is None else str(moda))
 
-    console.print(hot_table)
-    console.print(cold_table)
-    console.print(atraso_table)
     console.print(media_table)
 
 
-def _analysis_flow() -> None:
+def _analysis_flow(lottery_type: str) -> None:
     window_txt = questionary.text("Quantos ultimos concursos analisar?", default="120").ask()
     if not window_txt:
         return
 
     try:
-        window = max(20, int(window_txt))
+        window = max(10, int(window_txt))
     except ValueError:
         console.print("[red]Valor invalido para janela.[/red]")
         return
 
     with connect_db(DB_PATH) as conn:
-        all_draws = get_all_draws(conn)
-        recent_stats = get_recent_stats(conn, window)
+        all_draws = get_all_draws(conn, lottery_type)
+        recent_stats = get_recent_stats(conn, lottery_type, window)
 
     if not all_draws:
         console.print("[yellow]Banco vazio. Faca a carga inicial primeiro.[/yellow]")
         return
 
-    analysis = sliding_window_analysis(all_draws, recent_stats, window)
-    _render_analysis_tables(analysis)
+    if lottery_type == "megasena":
+        analysis = ms_analyzer.sliding_window_analysis(all_draws, recent_stats, window)
+    else:
+        analysis = lf_analyzer.sliding_window_analysis(all_draws, recent_stats, window)
+        
+    _render_analysis_tables(analysis, lottery_type)
 
     sugestoes = analysis["sugestoes"]
     cfg_table = Table(title="Sugestoes de filtros", show_header=True, header_style="bold blue")
@@ -184,14 +215,20 @@ def _analysis_flow() -> None:
         cfg_table.add_row(key, str(value))
     console.print(cfg_table)
 
-    if questionary.confirm("Deseja aplicar estas sugestoes em config_filtros.json?", default=True).ask():
-        cfg = FilterConfig(**sugestoes)
-        save_filter_config(CONFIG_PATH, cfg)
+    config_path = CONFIG_LOTOFACIL if lottery_type == "lotofacil" else CONFIG_MEGASENA
+
+    if questionary.confirm("Deseja aplicar estas sugestoes?", default=True).ask():
+        if lottery_type == "megasena":
+            cfg = ms_filters.FilterConfig(**sugestoes)
+        else:
+            cfg = lf_filters.FilterConfig(**sugestoes)
+        save_filter_config(config_path, cfg)
         console.print("[green]Configuracoes aplicadas com sucesso.[/green]")
 
 
-def _generate_games_flow() -> None:
-    cfg = load_filter_config(CONFIG_PATH)
+def _generate_games_flow(lottery_type: str) -> None:
+    config_path = CONFIG_LOTOFACIL if lottery_type == "lotofacil" else CONFIG_MEGASENA
+    cfg = load_filter_config(config_path, lottery_type)
 
     amount_txt = questionary.text("Quantos palpites deseja gerar?", default="5").ask()
     attempts_txt = questionary.text("Tentativas maximas?", default="300000").ask()
@@ -206,14 +243,27 @@ def _generate_games_flow() -> None:
         return
 
     with connect_db(DB_PATH) as conn:
-        draws = get_recent_draws(conn, 1)
+        draws = get_recent_draws(conn, lottery_type, 1)
 
     if not draws:
         console.print("[yellow]Banco vazio. Faca a carga inicial primeiro.[/yellow]")
         return
 
-    previous = draws[-1]["dezenas"]
-    games = generate_filtered_games(cfg, previous, amount, max_attempts)
+    if lottery_type == "lotofacil":
+        previous = draws[-1]["dezenas"]
+        with connect_db(DB_PATH) as conn:
+            all_draws = get_all_draws(conn, lottery_type)
+        ciclo_stats = lf_analyzer.calculate_lotofacil_cycles(all_draws)
+        ausentes = ciclo_stats["dezenas_ausentes_atual"]
+        games = lf_filters.generate_filtered_games(cfg, previous, amount, max_attempts, ausentes)
+    else:
+        with connect_db(DB_PATH) as conn:
+            all_draws = get_all_draws(conn, lottery_type)
+            recent_stats = get_recent_stats(conn, lottery_type, 120)
+        analysis = ms_analyzer.sliding_window_analysis(all_draws, recent_stats, 120)
+        hot = [item["Dezena"] for item in analysis["frequencia_completa"] if "Quente" in item["Categoria"]]
+        cold = [item["Dezena"] for item in analysis["frequencia_completa"] if "Fria" in item["Categoria"]]
+        games = ms_filters.generate_filtered_games(cfg, amount, max_attempts, hot, cold)
 
     filtro_table = Table(title="Filtros ativos", show_header=True, header_style="bold cyan")
     filtro_table.add_column("Filtro")
@@ -236,14 +286,15 @@ def _generate_games_flow() -> None:
     console.print(game_table)
 
 
-def _show_status() -> None:
+def _show_status(lottery_type: str) -> None:
     with connect_db(DB_PATH) as conn:
-        total = count_draws(conn)
-        last = get_last_concurso(conn)
+        total = count_draws(conn, lottery_type)
+        last = get_last_concurso(conn, lottery_type)
 
-    status_table = Table(title="Status do aplicativo", show_header=False)
+    status_table = Table(title=f"Status da loteria: {lottery_type}", show_header=False)
     status_table.add_row("Banco", str(DB_PATH))
-    status_table.add_row("Config filtros", str(CONFIG_PATH))
+    config_file = CONFIG_LOTOFACIL if lottery_type == "lotofacil" else CONFIG_MEGASENA
+    status_table.add_row("Config filtros", str(config_file))
     status_table.add_row("Total de sorteios", str(total))
     status_table.add_row("Ultimo concurso", "-" if last is None else str(last))
     console.print(status_table)
@@ -251,41 +302,43 @@ def _show_status() -> None:
 
 def main() -> None:
     _bootstrap_db()
-    _show_header()
+
+    lotaria_choice = questionary.select(
+        "Escolha a loteria para gerenciar:",
+        choices=["1) Lotofácil", "2) Mega-Sena", "0) Sair"]
+    ).ask()
+
+    if not lotaria_choice or lotaria_choice.startswith("0"):
+        console.print("[cyan]Encerrando aplicativo.[/cyan]")
+        return
+
+    lottery_type = "lotofacil" if lotaria_choice.startswith("1") else "megasena"
+    _show_header(lottery_type)
 
     options = [
         "1) Carga inicial pelo Excel (uma vez)",
         "2) Atualizar com novos sorteios da API",
-        "3) Analise dinamica (janela deslizante)",
+        "3) Analise dinamica (tabela ordenada e ciclo)",
         "4) Gerar palpites com pipeline de filtros",
         "5) Ver status",
-        "0) Sair",
+        "0) Voltar"
     ]
 
     while True:
         choice = questionary.select("Escolha uma opcao:", choices=options).ask()
         if choice is None or choice.startswith("0"):
-            console.print("[cyan]Encerrando aplicativo.[/cyan]")
             break
 
         if choice.startswith("1"):
-            _load_initial_excel_flow()
-            continue
-
-        if choice.startswith("2"):
-            _update_from_api_flow()
-            continue
-
-        if choice.startswith("3"):
-            _analysis_flow()
-            continue
-
-        if choice.startswith("4"):
-            _generate_games_flow()
-            continue
-
-        if choice.startswith("5"):
-            _show_status()
+            _load_initial_excel_flow(lottery_type)
+        elif choice.startswith("2"):
+            _update_from_api_flow(lottery_type)
+        elif choice.startswith("3"):
+            _analysis_flow(lottery_type)
+        elif choice.startswith("4"):
+            _generate_games_flow(lottery_type)
+        elif choice.startswith("5"):
+            _show_status(lottery_type)
 
 
 if __name__ == "__main__":

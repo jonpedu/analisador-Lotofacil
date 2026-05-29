@@ -33,6 +33,54 @@ def _safe_mode(values: list[int]) -> int | None:
         return None
 
 
+def calculate_lotofacil_cycles(all_draws: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Calcula o histórico de ciclos da Lotofácil e o estado do ciclo atual.
+    Um ciclo se inicia no concurso 1 (ou após o fechamento do ciclo anterior)
+    e termina quando todas as 25 dezenas foram sorteadas pelo menos uma vez.
+    """
+    if not all_draws:
+        return {
+            "ciclo_atual_numero": 1,
+            "concursos_no_ciclo_atual": 0,
+            "dezenas_sorteadas_atual": [],
+            "dezenas_ausentes_atual": list(range(1, 26)),
+            "historico_ciclos": [],
+        }
+
+    ciclos = []
+    concursos_ciclo_atual = 0
+    sorteadas_no_ciclo = set()
+    inicio_concurso = all_draws[0]["concurso"]
+    ciclo_numero = 1
+
+    for draw in all_draws:
+        concursos_ciclo_atual += 1
+        sorteadas_no_ciclo.update(draw["dezenas"])
+
+        if len(sorteadas_no_ciclo) == 25:
+            # Ciclo fechou!
+            ciclos.append({
+                "ciclo": ciclo_numero,
+                "duracao": concursos_ciclo_atual,
+                "fim_concurso": draw["concurso"],
+            })
+            # Reseta para o próximo ciclo
+            sorteadas_no_ciclo = set()
+            concursos_ciclo_atual = 0
+            ciclo_numero += 1
+
+    dezenas_ausentes = sorted(list(set(range(1, 26)) - sorteadas_no_ciclo))
+
+    return {
+        "ciclo_atual_numero": ciclo_numero,
+        "concursos_no_ciclo_atual": concursos_ciclo_atual,
+        "dezenas_sorteadas_atual": sorted(list(sorteadas_no_ciclo)),
+        "dezenas_ausentes_atual": dezenas_ausentes,
+        "historico_ciclos": ciclos,
+    }
+
+
 def sliding_window_analysis(
     all_draws: list[dict[str, Any]],
     recent_stats: list[dict[str, int]],
@@ -40,24 +88,23 @@ def sliding_window_analysis(
 ) -> dict[str, Any]:
     if not all_draws:
         return {
-            "mais_sorteadas": [],
-            "menos_sorteadas": [],
+            "frequencia_completa": [],
             "atrasos": {},
             "medias": {},
             "modas": {},
             "sugestoes": {},
+            "ciclo": {},
         }
 
     recent_draws = all_draws[-window:] if window > 0 else all_draws
     dezenas_flat = [d for draw in recent_draws for d in draw["dezenas"]]
     freq = Counter(dezenas_flat)
 
+    # Garante que todos os 25 números existam na contagem
     for dezena in range(1, 26):
         freq.setdefault(dezena, 0)
 
-    mais_sorteadas = freq.most_common(10)
-    menos_sorteadas = sorted(freq.items(), key=lambda item: item[1])[:10]
-
+    # Calcula o atraso atual para cada dezena
     atraso_por_dezena: dict[int, int] = {}
     for dezena in range(1, 26):
         atraso = 0
@@ -66,6 +113,36 @@ def sliding_window_analysis(
                 break
             atraso += 1
         atraso_por_dezena[dezena] = atraso
+
+    # Tabela unificada de frequências ordenadas
+    total_sorteios = len(recent_draws)
+    frequencia_completa = []
+    
+    # Classificação de Quente, Fria, Intermediária baseada em limites de freq
+    sorted_items = sorted(freq.items(), key=lambda x: x[1], reverse=True)
+    # Top 8 mais frequentes -> Quentes
+    # Bottom 8 menos frequentes -> Frias
+    # O resto -> Intermediárias
+    quentes = {item[0] for item in sorted_items[:8]}
+    frias = {item[0] for item in sorted_items[-8:]}
+
+    for dezena, count in sorted_items:
+        pct = (count / total_sorteios) * 100 if total_sorteios > 0 else 0.0
+        
+        if dezena in quentes:
+            categoria = "🔥 Quente"
+        elif dezena in frias:
+            categoria = "❄️ Fria"
+        else:
+            categoria = "⚡ Intermediária"
+
+        frequencia_completa.append({
+            "Dezena": dezena,
+            "Frequência": count,
+            "Frequência (%)": round(pct, 1),
+            "Atraso Atual": atraso_por_dezena[dezena],
+            "Categoria": categoria
+        })
 
     medias: dict[str, float] = {}
     modas: dict[str, int | None] = {}
@@ -80,10 +157,12 @@ def sliding_window_analysis(
             "qtd_multiplos_3",
             "qtd_moldura",
         ]:
-            values = df[col].astype(int).tolist()
-            medias[col] = float(mean(values))
-            modas[col] = _safe_mode(values)
+            if col in df.columns:
+                values = df[col].astype(int).tolist()
+                medias[col] = float(mean(values))
+                modas[col] = _safe_mode(values)
 
+    # Média de dezenas repetidas do concurso anterior
     repeticoes = []
     for idx in range(1, len(recent_draws)):
         prev_set = set(recent_draws[idx - 1]["dezenas"])
@@ -100,6 +179,9 @@ def sliding_window_analysis(
     top_pares_impares = [
         [int(k[0]), int(k[1])] for k, _ in pares_impares_counter.most_common(3)
     ] or [[7, 8], [8, 7], [9, 6]]
+
+    # Calcula ciclos
+    ciclo_stats = calculate_lotofacil_cycles(all_draws)
 
     sugestoes = {
         "allowed_even_odd_pairs": top_pares_impares,
@@ -119,14 +201,14 @@ def sliding_window_analysis(
         "row_max": 4,
         "col_min": 1,
         "col_max": 4,
-        "max_consecutive": 6,
+        "max_consecutive": 4,
     }
 
     return {
-        "mais_sorteadas": mais_sorteadas,
-        "menos_sorteadas": menos_sorteadas,
+        "frequencia_completa": frequencia_completa,
         "atrasos": atraso_por_dezena,
         "medias": medias,
         "modas": modas,
         "sugestoes": sugestoes,
+        "ciclo": ciclo_stats,
     }

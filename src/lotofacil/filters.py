@@ -4,7 +4,7 @@ import random
 from dataclasses import dataclass
 from typing import Callable
 
-from src.analyzer import FIBONACCI, MOLDURA, PRIMOS
+from src.lotofacil.analyzer import FIBONACCI, MOLDURA, PRIMOS
 
 Validator = Callable[[list[int], "FilterConfig", list[int]], bool]
 
@@ -50,7 +50,7 @@ def default_filter_config() -> FilterConfig:
         row_max=4,
         col_min=1,
         col_max=4,
-        max_consecutive=6,
+        max_consecutive=4,
     )
 
 
@@ -153,15 +153,78 @@ def generate_filtered_games(
     previous: list[int],
     amount: int,
     max_attempts: int,
+    cycle_absent: list[int] = None
 ) -> list[list[int]]:
+    """
+    Gerador Inteligente Ponderado da Lotofácil.
+    Em vez de força bruta aleatória pura, constrói candidatos estruturados:
+      - Garante que repita R dezenas do concurso anterior (onde R é calibrado nos limites permitidos, ex: 8 a 10).
+      - Insere preferencialmente as dezenas ausentes do ciclo para alta probabilidade de acerto.
+      - Seleciona o restante das dezenas do conjunto complementar.
+    """
     pipeline = TicketPipeline()
     approved: list[list[int]] = []
     attempts = 0
 
+    if not previous or len(previous) != 15:
+        # Fallback para sorteio puramente aleatório se não houver concurso anterior válido
+        previous = list(range(1, 16))
+
+    previous_set = set(previous)
+    complementary = sorted(list(set(range(1, 26)) - previous_set)) # 10 dezenas que não saíram
+
+    # Lista de dezenas ausentes do ciclo de prioridade
+    cycle_absent_set = set(cycle_absent) if cycle_absent else set()
+
     while len(approved) < amount and attempts < max_attempts:
         attempts += 1
-        game = sorted(random.sample(range(1, 26), 15))
-        if pipeline.validate(game, cfg, previous):
+        
+        # Decide quantas dezenas repetir do concurso anterior
+        r_target = random.randint(cfg.repeat_min, cfg.repeat_max)
+        non_r_target = 15 - r_target
+
+        if r_target > 15 or non_r_target > 10:
+            # Fallback seguro caso as configs estejam descalibradas
+            r_target = 9
+            non_r_target = 6
+
+        # Divide as dezenas ausentes do ciclo entre as que pertencem ao concurso anterior e complementar
+        cycle_in_prev = list(previous_set.intersection(cycle_absent_set))
+        cycle_in_comp = list(set(complementary).intersection(cycle_absent_set))
+
+        # 1. Escolhe dezenas do concurso anterior
+        prev_picked = []
+        # Garante algumas do ciclo se disponíveis
+        if cycle_in_prev:
+            num_to_pick = min(len(cycle_in_prev), random.randint(1, max(1, len(cycle_in_prev) // 2)))
+            prev_picked = random.sample(cycle_in_prev, num_to_pick)
+
+        remaining_prev = list(previous_set - set(prev_picked))
+        needed_prev = r_target - len(prev_picked)
+        if needed_prev > 0 and len(remaining_prev) >= needed_prev:
+            prev_picked.extend(random.sample(remaining_prev, needed_prev))
+        elif needed_prev > 0:
+            # Fallback
+            prev_picked.extend(remaining_prev)
+
+        # 2. Escolhe dezenas do complementar
+        comp_picked = []
+        if cycle_in_comp:
+            num_to_pick = min(len(cycle_in_comp), random.randint(1, len(cycle_in_comp)))
+            comp_picked = random.sample(cycle_in_comp, num_to_pick)
+
+        remaining_comp = list(set(complementary) - set(comp_picked))
+        needed_comp = non_r_target - len(comp_picked)
+        if needed_comp > 0 and len(remaining_comp) >= needed_comp:
+            comp_picked.extend(random.sample(remaining_comp, needed_comp))
+        elif needed_comp > 0:
+            # Fallback
+            comp_picked.extend(remaining_comp)
+
+        # Une os dois grupos e ordena
+        game = sorted(prev_picked + comp_picked)
+
+        if len(game) == 15 and pipeline.validate(game, cfg, previous):
             approved.append(game)
 
     return approved

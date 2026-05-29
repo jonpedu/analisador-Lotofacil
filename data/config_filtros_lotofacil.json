@@ -9,18 +9,18 @@
       7
     ],
     [
-      6,
-      9
+      9,
+      6
     ]
   ],
-  "sum_min": 175,
-  "sum_max": 205,
+  "sum_min": 180,
+  "sum_max": 220,
   "repeat_min": 8,
   "repeat_max": 10,
-  "prime_min": 5,
-  "prime_max": 7,
-  "fibonacci_min": 4,
-  "fibonacci_max": 6,
+  "prime_min": 4,
+  "prime_max": 6,
+  "fibonacci_min": 3,
+  "fibonacci_max": 5,
   "multiple3_min": 4,
   "multiple3_max": 6,
   "moldura_min": 9,
@@ -29,5 +29,5 @@
   "row_max": 4,
   "col_min": 1,
   "col_max": 4,
-  "max_consecutive": 6
+  "max_consecutive": 4
 }
