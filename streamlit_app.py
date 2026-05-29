@@ -715,7 +715,27 @@ def _generate_section(lottery_type: str) -> None:
     st.caption("Gera volantes com filtros matemáticos dinâmicos para maximizar a assertividade.")
     st.markdown("---")
 
-    cfg = load_filter_config(config_path, lottery_type)
+    # Seletor de Estratégia de Filtros para Geração
+    estrategia = st.radio(
+        "🛠️ Selecione a Estratégia de Filtros para Geração",
+        [
+            "⚡ Filtros Otimizados Personalizados (Salvos a partir da Análise)",
+            "🟢 Filtros Padrões Originais (Configuração Padrão da Loteria)"
+        ],
+        index=0,
+        key=f"estrategia_geracao_{lottery_type}"
+    )
+
+    if "Padrões" in estrategia:
+        if lottery_type == "megasena":
+            cfg = ms_filters.default_filter_config()
+        else:
+            cfg = lf_filters.default_filter_config()
+        st.info("ℹ️ **Modo Filtros Padrões:** Usando regras padrões originais de fábrica. (Dica: você pode ajustá-las abaixo e clicar em Salvar para criar uma nova configuração personalizada).")
+    else:
+        cfg = load_filter_config(config_path, lottery_type)
+        st.success("🎯 **Modo Filtros Personalizados:** Os limites calibrados na aba de análise de tendências estão ativos.")
+
     cfg = _filters_editor(cfg, lottery_type)
 
     col1, col2 = st.columns(2)
