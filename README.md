@@ -1,5 +1,13 @@
 # Loterias Pro-Analyzer 🧠
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-Interface-FF4B4B?logo=streamlit&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-Banco%20Local-003B57?logo=sqlite&logoColor=white)
+![Pandas](https://img.shields.io/badge/Pandas-An%C3%A1lise-150458?logo=pandas&logoColor=white)
+![Licença](https://img.shields.io/badge/Licen%C3%A7a-MIT-green)
+![Último Commit](https://img.shields.io/github/last-commit/jonpedu/analisador-Lotofacil?label=%C3%9Altimo%20commit)
+![Tamanho do Repo](https://img.shields.io/github/repo-size/jonpedu/analisador-Lotofacil?label=Tamanho)
+
 Uma plataforma modular e avançada de análise estatística, rastreamento de tendências e geração inteligente de palpites matemáticos para as principais loterias da Caixa: **Lotofácil** e **Mega-Sena**. 
 
 O sistema conta com um motor local de banco de dados SQLite de alta performance, atualizações automáticas via API de loterias e uma interface premium rica desenvolvida em Streamlit.
@@ -57,6 +65,15 @@ Para executar ferramentas e utilitários via linha de comando interativa:
 ```bash
 py src/main.py
 ```
+
+### 🆕 Primeira execução (clone novo)
+O banco de dados local **não** é versionado no repositório. Após clonar em uma máquina nova:
+
+1. Instale as dependências (`py -m pip install -r requirements.txt`);
+2. Inicie o app e use **📥 Carga de Planilha** (as planilhas `Lotofácil.xlsx` e `Mega-Sena.xlsx` já estão na raiz do projeto);
+3. Use **🔄 Sincronizar p/ API** para baixar os concursos mais recentes.
+
+Pronto — o banco `data/lotofacil_analyzer_pro.db` é reconstruído automaticamente.
 
 ---
 

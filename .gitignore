@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Ambientes virtuais
+venv/
+.venv/
+
+# Banco de dados local (reconstruído via Carga de Planilha + Sincronizar p/ API)
+data/lotofacil_analyzer_pro.db
+
+# Uploads temporários de planilhas pela interface
+data/upload_*.xlsx
+
+# Configurações locais do Claude Code
+.claude/settings.local.json
+
+# Sistema operacional / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
