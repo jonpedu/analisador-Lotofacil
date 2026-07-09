@@ -24,7 +24,9 @@ from src.etl import read_initial_excel
 
 # Imports de Loterias Modulares
 import src.lotofacil.analyzer as lf_analyzer
+import src.lotofacil.backtest as lf_backtest
 import src.lotofacil.filters as lf_filters
+import src.lotofacil.scoring as lf_scoring
 import src.megasena.analyzer as ms_analyzer
 import src.megasena.filters as ms_filters
 
@@ -706,6 +708,153 @@ def _filters_editor(cfg: Any, lottery_type: str) -> Any:
     return cfg
 
 
+def _render_score_rank_result(resultado: dict) -> None:
+    jogos = resultado["jogos"]
+    st.markdown(
+        f"**Resultado da Geração:** pool de **{resultado['pool_gerado']}** candidatos únicos analisados "
+        f"({resultado['tentativas']} tentativas, {resultado['descartados_filtro']} reprovados nos filtros). "
+        f"Os **{len(jogos)}** melhores foram selecionados com diversificação de carteira."
+    )
+
+    if not jogos:
+        st.error("😭 Nenhum candidato válido gerado. Relaxe os filtros, desative o modo estrito ou aumente o pool.")
+        return
+
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        st.metric("Score do Melhor Bilhete", f"{jogos[0]['score']['total']:.1f} / 100")
+    with col_m2:
+        sobre = resultado["sobreposicao_media"]
+        st.metric(
+            "Sobreposição Média da Carteira",
+            "-" if sobre is None else f"{sobre} dezenas",
+            help="Média de dezenas em comum entre os pares de bilhetes. Menor = maior cobertura."
+        )
+
+    tabela = []
+    for i, jogo in enumerate(jogos, 1):
+        s = jogo["score"]
+        tabela.append({
+            "Bilhete": f"#{i}",
+            "Dezenas": "  ➖  ".join(f"{n:02d}" for n in jogo["dezenas"]),
+            "Score": s["total"],
+            "Aderência": s["aderencia"],
+            "Equilíbrio Freq.": s["equilibrio_freq"],
+            "Repetição": s["repeticao"],
+            "Anti-Pop": s["anti_popularidade"],
+        })
+    st.dataframe(pd.DataFrame(tabela), use_container_width=True, hide_index=True)
+    st.caption(
+        "ℹ️ O score mede aderência ao perfil histórico e qualidade de rateio — "
+        "nenhum score altera a probabilidade matemática de acerto (valide na aba 🔬 Backtest)."
+    )
+    st.success("🍀 Boa sorte! Registre os bilhetes em uma casa lotérica ou no app oficial da Caixa.")
+
+
+def _backtest_section(lottery_type: str) -> None:
+    accent_color = "#8A2BE2"
+    st.markdown(f"<h2 style='color: {accent_color}; text-align: center;'>🔬 Backtest de Estratégias (Lotofácil)</h2>", unsafe_allow_html=True)
+    st.caption(
+        "Simulação honesta: para cada concurso do período testado, a estratégia escolhe 15 dezenas "
+        "vendo apenas os concursos anteriores, e o acerto é conferido contra o resultado real."
+    )
+    st.markdown("---")
+
+    if lottery_type != "lotofacil":
+        st.info("ℹ️ O backtest está disponível apenas para a Lotofácil por enquanto. Selecione a Lotofácil na barra lateral.")
+        return
+
+    with connect_db(DB_PATH) as conn:
+        total = count_draws(conn, "lotofacil")
+
+    if total < 200:
+        st.warning("⚠️ Histórico insuficiente. Importe os sorteios (mínimo ~200 concursos) antes de rodar o backtest.")
+        return
+
+    teoria = lf_backtest.theoretical_summary()
+    st.markdown(
+        f"<div class='card-lf'><b>📐 Referência matemática (qualquer bilhete):</b> "
+        f"média de <b>{teoria['media']:.0f} pontos</b> | 11+ pontos em <b>{teoria['pct_11']}%</b> dos concursos | "
+        f"13+ em <b>{teoria['pct_13']}%</b> | 14+ em <b>{teoria['pct_14']}%</b>. "
+        f"Uma estratégia só é melhor que o acaso se superar esses números de forma consistente.</div>",
+        unsafe_allow_html=True,
+    )
+
+    todas = list(lf_backtest.STRATEGIES.keys())
+    escolhidas = st.multiselect(
+        "Estratégias para comparar",
+        todas,
+        default=["Aleatório puro (baseline)", "15 mais atrasadas", "Repete 9 do anterior", "Score & Rank (gerador do app)"],
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        n_testes = st.number_input(
+            "Concursos a testar (mais recentes)",
+            min_value=50, max_value=max(50, total - 101), value=min(300, total - 101), step=50,
+        )
+    with col2:
+        seed = st.number_input("Semente aleatória (reprodutibilidade)", min_value=1, max_value=99999, value=42)
+
+    lentas = [e for e in escolhidas if e in lf_backtest.ESTRATEGIAS_LENTAS]
+    if lentas and n_testes > 500:
+        st.warning(f"⏳ A estratégia '{lentas[0]}' é pesada: com {int(n_testes)} concursos o teste pode demorar alguns minutos.")
+
+    if st.button("🚀 Rodar Backtest", type="primary", use_container_width=True):
+        if not escolhidas:
+            st.warning("Selecione ao menos uma estratégia.")
+            return
+
+        with connect_db(DB_PATH) as conn:
+            all_draws = get_all_draws(conn, "lotofacil")
+
+        barra = st.progress(0.0, text="Simulando concursos...")
+        resultados = lf_backtest.run_backtest(
+            all_draws,
+            escolhidas,
+            test_last_n=int(n_testes),
+            warmup=100,
+            seed=int(seed),
+            progress_callback=lambda p: barra.progress(min(p, 1.0), text=f"Simulando concursos... {p*100:.0f}%"),
+        )
+        barra.empty()
+
+        linhas = [{
+            "Estratégia": r.estrategia,
+            "Concursos": r.concursos_testados,
+            "Média de Pontos": r.media,
+            "≥11 pts (%)": r.pct_11,
+            "≥12 pts (%)": r.pct_12,
+            "≥13 pts (%)": r.pct_13,
+            "Melhor Resultado": r.melhor,
+        } for r in resultados]
+        linhas.append({
+            "Estratégia": "📐 Teoria (acaso puro)",
+            "Concursos": "-",
+            "Média de Pontos": teoria["media"],
+            "≥11 pts (%)": teoria["pct_11"],
+            "≥12 pts (%)": teoria["pct_12"],
+            "≥13 pts (%)": teoria["pct_13"],
+            "Melhor Resultado": "-",
+        })
+        st.dataframe(pd.DataFrame(linhas), use_container_width=True, hide_index=True)
+
+        # Distribuição de pontos por estratégia
+        st.markdown("### 📊 Distribuição de Pontos")
+        dist_data = {}
+        for r in resultados:
+            dist_data[r.estrategia] = {
+                k: 100 * v / r.concursos_testados for k, v in r.distribuicao.items()
+            }
+        df_dist = pd.DataFrame(dist_data).fillna(0.0).sort_index()
+        df_dist.index.name = "Pontos"
+        st.bar_chart(df_dist)
+        st.caption(
+            "ℹ️ Diferenças de poucos centésimos na média são ruído estatístico, não vantagem. "
+            "Se uma estratégia superar a teoria de forma consistente em amostras grandes, ela merece atenção."
+        )
+
+
 def _generate_section(lottery_type: str) -> None:
     accent_color = "#8A2BE2" if lottery_type == "lotofacil" else "#20C997"
     lottery_name = "Lotofácil" if lottery_type == "lotofacil" else "Mega-Sena"
@@ -738,6 +887,46 @@ def _generate_section(lottery_type: str) -> None:
 
     cfg = _filters_editor(cfg, lottery_type)
 
+    # Modo de geração (Score & Rank disponível apenas para Lotofácil)
+    modo_score_rank = False
+    pool_size = 3000
+    max_overlap = 12
+    peso_anti_pop = 0.25
+    strict_filters = True
+
+    if lottery_type == "lotofacil":
+        modo = st.radio(
+            "🧮 Modo de Geração",
+            [
+                "🏆 Score & Rank — gera milhares de candidatos, pontua e escolhe os melhores (recomendado)",
+                "🎲 Clássico — aprova o primeiro candidato que passar nos filtros",
+            ],
+            index=0,
+            key="modo_geracao_lf",
+        )
+        modo_score_rank = "Score & Rank" in modo
+
+        if modo_score_rank:
+            with st.expander("⚙️ Parâmetros do Score & Rank", expanded=False):
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    pool_size = st.slider("Tamanho do pool de candidatos", 500, 20000, 3000, step=500)
+                    max_overlap = st.slider(
+                        "Sobreposição máxima entre bilhetes da carteira",
+                        8, 14, 12,
+                        help="Quanto menor, mais diversificados os jogos entre si (maior cobertura do volante)."
+                    )
+                with col_b:
+                    peso_anti_pop = st.slider(
+                        "Peso do Anti-Popularidade", 0.0, 1.0, 0.25, step=0.05,
+                        help="Evita padrões muito jogados (sequências, linhas cheias, resultados passados). "
+                             "Não muda a chance de acertar — aumenta o rateio esperado nos prêmios de 14/15."
+                    )
+                    strict_filters = st.checkbox(
+                        "Exigir aprovação nos filtros (modo estrito)", value=True,
+                        help="Desmarcado: os filtros deixam de ser eliminatórios e viram apenas influência no score."
+                    )
+
     col1, col2 = st.columns(2)
     with col1:
         amount = st.number_input("Quantidade de Bilhetes a Gerar", min_value=1, max_value=500, value=5, step=1)
@@ -762,7 +951,23 @@ def _generate_section(lottery_type: str) -> None:
                     all_draws = get_all_draws(conn, lottery_type)
                 ciclo_stats = lf_analyzer.calculate_lotofacil_cycles(all_draws)
                 ausentes = ciclo_stats["dezenas_ausentes_atual"]
-                
+
+                if modo_score_rank:
+                    context = lf_scoring.build_scoring_context(all_draws, window=120)
+                    weights = lf_scoring.ScoringWeights(anti_popularidade=peso_anti_pop)
+                    resultado = lf_scoring.generate_ranked_games(
+                        cfg,
+                        context,
+                        amount=int(amount),
+                        pool_size=int(pool_size),
+                        max_attempts=int(max_attempts),
+                        weights=weights,
+                        max_overlap=int(max_overlap),
+                        strict_filters=strict_filters,
+                    )
+                    _render_score_rank_result(resultado)
+                    return
+
                 games = lf_filters.generate_filtered_games(cfg, previous, int(amount), int(max_attempts), ausentes)
             else:
                 # Mega-Sena: Filtro de quentes/frias baseadas nos últimos 120 jogos
@@ -944,6 +1149,7 @@ def main() -> None:
                 "🔄 Sincronizar p/ API",
                 "📈 Análise Estatística",
                 "🎲 Gerador Inteligente",
+                "🔬 Backtest de Estratégias",
                 "🧐 Histórico e Resultados",
             ],
         )
@@ -959,6 +1165,8 @@ def main() -> None:
         _analysis_section(lottery_type)
     elif menu == "🎲 Gerador Inteligente":
         _generate_section(lottery_type)
+    elif menu == "🔬 Backtest de Estratégias":
+        _backtest_section(lottery_type)
     elif menu == "🧐 Histórico e Resultados":
         _resultados_section(lottery_type)
 

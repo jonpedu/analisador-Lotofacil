@@ -9,9 +9,13 @@ O sistema conta com um motor local de banco de dados SQLite de alta performance,
 ## 🚀 Principais Recursos
 
 ### 🍀 Módulo Lotofácil
+* **Gerador Score & Rank:** Gera milhares de candidatos, pontua cada um (aderência estatística, equilíbrio de frequência, repetição e anti-popularidade) e seleciona os melhores com diversificação de carteira.
+* **Backtest de Estratégias:** Simula qualquer estratégia contra o histórico real de concursos e compara com a referência matemática do acaso — a régua honesta para validar ideias antes de apostar.
 * **Rastreador de Ciclos:** Identifica automaticamente o número do ciclo ativo e exibe exatamente quais dezenas estão ausentes (faltando para fechar o ciclo).
-* **Gerador Inteligente Ponderado:** Substitui palpites aleatórios simples por bilhetes construídos matematicamente para repetir de 8 a 10 dezenas do concurso anterior, injetar dezenas ausentes do ciclo ativo e balancear números quentes, frios e intermediários.
+* **Gerador Inteligente Ponderado (Clássico):** Bilhetes construídos matematicamente para repetir de 8 a 10 dezenas do concurso anterior, injetar dezenas ausentes do ciclo ativo e balancear números quentes, frios e intermediários.
 * **Pipeline de Filtros:** Validações rigorosas de soma de dezenas, par/ímpar, primos, Fibonacci, múltiplos de 3, números da moldura e limite máximo de números consecutivos.
+
+> 📖 **Guia completo de todas as ferramentas e como usá-las: [GUIA_FERRAMENTAS.md](GUIA_FERRAMENTAS.md)**
 
 ### 💰 Módulo Mega-Sena
 * **Mapeamento de Quadrantes:** Divide a cartela fisicamente em 4 quadrantes (Top Left, Top Right, Bottom Left, Bottom Right) e assegura que as dezenas estejam distribuídas uniformemente, alinhando-se à física da maioria dos sorteios reais.

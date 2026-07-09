@@ -148,6 +148,66 @@ class TicketPipeline:
         return all(validator(ticket, cfg, previous) for validator in self.validators)
 
 
+def build_structured_candidate(
+    cfg: FilterConfig,
+    previous_set: set[int],
+    complementary: list[int],
+    cycle_absent_set: set[int],
+    rng: random.Random | None = None,
+) -> list[int]:
+    """
+    Constrói um único candidato estruturado:
+      - Repete R dezenas do concurso anterior (R sorteado dentro dos limites do filtro).
+      - Insere preferencialmente as dezenas ausentes do ciclo.
+      - Completa com dezenas do conjunto complementar.
+    """
+    rnd = rng if rng is not None else random
+
+    # Decide quantas dezenas repetir do concurso anterior
+    r_target = rnd.randint(cfg.repeat_min, cfg.repeat_max)
+    non_r_target = 15 - r_target
+
+    if r_target > 15 or non_r_target > 10:
+        # Fallback seguro caso as configs estejam descalibradas
+        r_target = 9
+        non_r_target = 6
+
+    # Divide as dezenas ausentes do ciclo entre as que pertencem ao concurso anterior e complementar
+    cycle_in_prev = list(previous_set.intersection(cycle_absent_set))
+    cycle_in_comp = list(set(complementary).intersection(cycle_absent_set))
+
+    # 1. Escolhe dezenas do concurso anterior
+    prev_picked = []
+    # Garante algumas do ciclo se disponíveis
+    if cycle_in_prev:
+        num_to_pick = min(len(cycle_in_prev), rnd.randint(1, max(1, len(cycle_in_prev) // 2)))
+        prev_picked = rnd.sample(cycle_in_prev, num_to_pick)
+
+    remaining_prev = list(previous_set - set(prev_picked))
+    needed_prev = r_target - len(prev_picked)
+    if needed_prev > 0 and len(remaining_prev) >= needed_prev:
+        prev_picked.extend(rnd.sample(remaining_prev, needed_prev))
+    elif needed_prev > 0:
+        # Fallback
+        prev_picked.extend(remaining_prev)
+
+    # 2. Escolhe dezenas do complementar
+    comp_picked = []
+    if cycle_in_comp:
+        num_to_pick = min(len(cycle_in_comp), rnd.randint(1, len(cycle_in_comp)))
+        comp_picked = rnd.sample(cycle_in_comp, num_to_pick)
+
+    remaining_comp = list(set(complementary) - set(comp_picked))
+    needed_comp = non_r_target - len(comp_picked)
+    if needed_comp > 0 and len(remaining_comp) >= needed_comp:
+        comp_picked.extend(rnd.sample(remaining_comp, needed_comp))
+    elif needed_comp > 0:
+        # Fallback
+        comp_picked.extend(remaining_comp)
+
+    return sorted(prev_picked + comp_picked)
+
+
 def generate_filtered_games(
     cfg: FilterConfig,
     previous: list[int],
@@ -157,10 +217,8 @@ def generate_filtered_games(
 ) -> list[list[int]]:
     """
     Gerador Inteligente Ponderado da Lotofácil.
-    Em vez de força bruta aleatória pura, constrói candidatos estruturados:
-      - Garante que repita R dezenas do concurso anterior (onde R é calibrado nos limites permitidos, ex: 8 a 10).
-      - Insere preferencialmente as dezenas ausentes do ciclo para alta probabilidade de acerto.
-      - Seleciona o restante das dezenas do conjunto complementar.
+    Em vez de força bruta aleatória pura, constrói candidatos estruturados
+    (ver build_structured_candidate) e aprova o primeiro que passar nos filtros.
     """
     pipeline = TicketPipeline()
     approved: list[list[int]] = []
@@ -178,51 +236,7 @@ def generate_filtered_games(
 
     while len(approved) < amount and attempts < max_attempts:
         attempts += 1
-        
-        # Decide quantas dezenas repetir do concurso anterior
-        r_target = random.randint(cfg.repeat_min, cfg.repeat_max)
-        non_r_target = 15 - r_target
-
-        if r_target > 15 or non_r_target > 10:
-            # Fallback seguro caso as configs estejam descalibradas
-            r_target = 9
-            non_r_target = 6
-
-        # Divide as dezenas ausentes do ciclo entre as que pertencem ao concurso anterior e complementar
-        cycle_in_prev = list(previous_set.intersection(cycle_absent_set))
-        cycle_in_comp = list(set(complementary).intersection(cycle_absent_set))
-
-        # 1. Escolhe dezenas do concurso anterior
-        prev_picked = []
-        # Garante algumas do ciclo se disponíveis
-        if cycle_in_prev:
-            num_to_pick = min(len(cycle_in_prev), random.randint(1, max(1, len(cycle_in_prev) // 2)))
-            prev_picked = random.sample(cycle_in_prev, num_to_pick)
-
-        remaining_prev = list(previous_set - set(prev_picked))
-        needed_prev = r_target - len(prev_picked)
-        if needed_prev > 0 and len(remaining_prev) >= needed_prev:
-            prev_picked.extend(random.sample(remaining_prev, needed_prev))
-        elif needed_prev > 0:
-            # Fallback
-            prev_picked.extend(remaining_prev)
-
-        # 2. Escolhe dezenas do complementar
-        comp_picked = []
-        if cycle_in_comp:
-            num_to_pick = min(len(cycle_in_comp), random.randint(1, len(cycle_in_comp)))
-            comp_picked = random.sample(cycle_in_comp, num_to_pick)
-
-        remaining_comp = list(set(complementary) - set(comp_picked))
-        needed_comp = non_r_target - len(comp_picked)
-        if needed_comp > 0 and len(remaining_comp) >= needed_comp:
-            comp_picked.extend(random.sample(remaining_comp, needed_comp))
-        elif needed_comp > 0:
-            # Fallback
-            comp_picked.extend(remaining_comp)
-
-        # Une os dois grupos e ordena
-        game = sorted(prev_picked + comp_picked)
+        game = build_structured_candidate(cfg, previous_set, complementary, cycle_absent_set)
 
         if len(game) == 15 and pipeline.validate(game, cfg, previous):
             approved.append(game)
